@@ -4,19 +4,26 @@ import { useEffect, useRef, useState } from "react";
 import mqtt from "mqtt";
 
 // ====== CONFIG - ADJUST FOR YOUR BROKER ======
-const MQTT_HOST = "13.229.98.58";
+// const MQTT_HOST = "47.130.0.249";
+
+const MQTT_HOST = "ews-mqtt.digital-lab.ai/mqtt";
 // For browser you usually need a WebSocket URL, not raw 1883 TCP.
 // Example (change to match your broker config):
 
-const MQTT_URL = `ws://${MQTT_HOST}:9001`;
+const MQTT_URL = `wss://${MQTT_HOST}`;
 
-const MQTT_USERNAME = "ubuntu";
-const MQTT_PASSWORD = "130802";
+// ====== COMMAND MAPPING - EASILY CHANGE COMMAND SET HERE ======
+const SCALE_COMMANDS = {
+  START: "S",   // Command to start streaming data
+  ZERO: "cT_",    // Command to zero
+  TARE: "T",    // Tare command
+  GET_SERIAL: "NS_", // Command to get serial number (Standard SICS)
+};
 
-// Topics (match your Python simulator)
-const SCALE_TOPIC = "CKRG123"; // scale data published here
-const COMMAND_TOPIC = "CKRG123/commands"; // commands sent here
-// ============================================
+// const MQTT_USERNAME = "ubuntu";
+// const MQTT_PASSWORD = "130802";
+
+
 
 export default function App() {
   const clientRef = useRef(null);
@@ -24,7 +31,17 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastWeight, setLastWeight] = useState(null);
   const [lastTimestamp, setLastTimestamp] = useState(null);
+  const [serialNumber, setSerialNumber] = useState(null);
   const [log, setLog] = useState([]);
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const [topic, setTopic] = useState("scale");
+  const topicRef = useRef(topic); // Keep a ref for the message callback
+
+  // Update ref when topic changes
+  useEffect(() => {
+    topicRef.current = topic;
+  }, [topic]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -42,15 +59,22 @@ export default function App() {
     ]);
   };
 
+  const parseWeight = (str) => {
+    // Expected format: "B + 79.699 kg" or similar
+    // Match optional sign, optional space, then number
+    const match = str.match(/([+-]?\s*\d*\.?\d+)/);
+    if (!match) return null;
+    // Remove any spaces (like "+ 79") before parsing
+    return parseFloat(match[0].replace(/\s/g, ""));
+  };
+
   const handleConnect = () => {
     if (isConnected || isConnecting) return;
 
     setIsConnecting(true);
-    appendLog("Connecting to MQTT broker...");
+    appendLog(`Connecting to MQTT broker on topic: ${topic}...`);
 
     const client = mqtt.connect(MQTT_URL, {
-      username: MQTT_USERNAME,
-      password: MQTT_PASSWORD,
       reconnectPeriod: 2000,
     });
 
@@ -59,36 +83,53 @@ export default function App() {
       setIsConnected(true);
       appendLog("Connected to MQTT broker.");
 
-      client.subscribe(SCALE_TOPIC, (err) => {
+      client.subscribe(topic, (err) => {
         if (err) {
           appendLog(`Subscribe error: ${err.message}`);
         } else {
-          appendLog(`Subscribed to topic: ${SCALE_TOPIC}`);
+          appendLog(`Subscribed to topic: ${topic}`);
         }
       });
     });
 
-    client.on("message", (topic, message) => {
-      if (topic === SCALE_TOPIC) {
+    client.on("message", (msgTopic, message) => {
+      if (msgTopic === topicRef.current) {
         const sizeBytes =
           message && typeof message.length === "number"
             ? message.length
             : new TextEncoder().encode(String(message)).length;
-        appendLog(`Packet size: ${sizeBytes} bytes`);
+        // appendLog(`Packet size: ${sizeBytes} bytes`);
 
         try {
           const payload = JSON.parse(message.toString());
-          if (typeof payload.weight !== "undefined") {
+          // New format: { rawData: "B + 79.699 kg", serialNumber: "...", timestamp: "..." }
+          // Old format fallback: { weight: 12.34, ts: "..." }
+
+          if (payload.rawData) {
+            const val = parseWeight(payload.rawData);
+            if (val !== null) {
+              setLastWeight(val);
+              setLastTimestamp(payload.timestamp || new Date().toISOString());
+              if (payload.serialNumber) {
+                setSerialNumber(payload.serialNumber);
+              }
+              appendLog(`Received: ${payload.rawData} (${sizeBytes} bytes)`);
+            } else {
+              appendLog(`Could not parse weight from: ${payload.rawData}`);
+            }
+          } else if (typeof payload.weight !== "undefined") {
+            // Fallback for old format
             setLastWeight(payload.weight);
             setLastTimestamp(payload.ts || new Date().toISOString());
             appendLog(`Received weight: ${payload.weight}`);
           } else {
-            appendLog(`Received non-weight payload: ${message.toString()}`);
+            appendLog(`Unknown payload structure: ${message.toString()}`);
           }
         } catch (e) {
-          appendLog(`Invalid JSON from scale: ${message.toString()}`);
+          appendLog(`Invalid JSON: ${message.toString()}`);
         }
       }
+      
     });
 
     client.on("error", (err) => {
@@ -118,32 +159,37 @@ export default function App() {
       appendLog("Cannot send command: not connected.");
       return;
     }
-    clientRef.current.publish(COMMAND_TOPIC, command, { qos: 0 }, (err) => {
+    const cmdTopic = `${topic}/commands`;
+    // Calculate size
+    const cmdSize = new TextEncoder().encode(command).length;
+    
+    clientRef.current.publish(cmdTopic, command, { qos: 0 }, (err) => {
       if (err) {
         appendLog(`Failed to publish command "${command}": ${err.message}`);
       } else {
-        appendLog(`Published command "${command}" to ${COMMAND_TOPIC}`);
+        appendLog(`Published command "${command}" (${cmdSize} bytes) to ${cmdTopic}`);
       }
     });
   };
 
   const handleStart = () => {
-    // Your simulator listens for "START" to resume streaming
-    publishCommand("SI");
+    publishCommand(SCALE_COMMANDS.START);
   };
 
   const handleZero = () => {
-    // Your simulator treats "Z" as tare/zero command
-    publishCommand("Z");
+    publishCommand(SCALE_COMMANDS.ZERO);
+  };
+
+  const handleGetSerial = () => {
+    publishCommand(SCALE_COMMANDS.GET_SERIAL);
   };
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top, #0f172a 0, #020617 45%, #000 100%)",
-        color: "#e5e7eb",
+        background: "#f0fdf4", // Light green background basically white
+        color: "#1f2937", // Dark gray text
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -155,14 +201,12 @@ export default function App() {
         style={{
           width: "100%",
           maxWidth: "960px",
-          background:
-            "linear-gradient(145deg, rgba(15,23,42,0.95), rgba(15,23,42,0.85))",
+          background: "#ffffff",
           borderRadius: "24px",
           padding: "24px",
           boxShadow:
-            "0 25px 50px -12px rgba(15,23,42,0.9), 0 0 0 1px rgba(148,163,184,0.25)",
-          border: "1px solid rgba(148,163,184,0.35)",
-          backdropFilter: "blur(22px)",
+            "0 25px 50px -12px rgba(22, 163, 74, 0.15), 0 0 0 1px rgba(22, 163, 74, 0.1)",
+          border: "1px solid rgba(22, 163, 74, 0.1)",
         }}
       >
         {/* Header */}
@@ -182,11 +226,12 @@ export default function App() {
                 fontWeight: 700,
                 letterSpacing: "-0.03em",
                 marginBottom: "4px",
+                color: "#166534", // Dark green
               }}
             >
               Scale Control & Monitor
             </h1>
-            <p style={{ fontSize: "14px", color: "#9ca3af" }}>
+            <p style={{ fontSize: "14px", color: "#6b7280" }}>
               MQTT POC for reading scale data and sending commands.
             </p>
           </div>
@@ -201,7 +246,7 @@ export default function App() {
                 fontSize: "12px",
                 textTransform: "uppercase",
                 letterSpacing: "0.12em",
-                color: "#9ca3af",
+                color: "#6b7280",
                 marginBottom: "4px",
               }}
             >
@@ -214,8 +259,8 @@ export default function App() {
                 gap: "8px",
                 padding: "6px 10px",
                 borderRadius: "999px",
-                backgroundColor: "rgba(15,23,42,0.9)",
-                border: "1px solid rgba(148,163,184,0.4)",
+                backgroundColor: isConnected ? "rgba(22, 163, 74, 0.1)" : "rgba(243, 244, 246, 1)",
+                border: "1px solid rgba(229, 231, 235, 1)",
                 fontSize: "13px",
               }}
             >
@@ -225,16 +270,16 @@ export default function App() {
                   height: "8px",
                   borderRadius: "999px",
                   backgroundColor: isConnected
-                    ? "#22c55e"
+                    ? "#16a34a"
                     : isConnecting
                     ? "#f97316"
                     : "#ef4444",
                   boxShadow: isConnected
-                    ? "0 0 12px rgba(34,197,94,0.8)"
+                    ? "0 0 12px rgba(22, 163, 74, 0.6)"
                     : "none",
                 }}
               />
-              <span>
+              <span style={{ color: "#374151", fontWeight: 500 }}>
                 {isConnected
                   ? "Connected"
                   : isConnecting
@@ -242,8 +287,8 @@ export default function App() {
                   : "Disconnected"}
               </span>
             </div>
-            <div style={{ fontSize: "11px", color: "#6b7280", marginTop: 4 }}>
-              {MQTT_HOST} (port 1883 / WS bridge)
+            <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: 4 }}>
+              {MQTT_HOST}
             </div>
           </div>
         </div>
@@ -266,8 +311,8 @@ export default function App() {
                 padding: "18px 18px 20px",
                 borderRadius: "18px",
                 background:
-                  "radial-gradient(circle at top left, rgba(59,130,246,0.2), transparent 60%), #020617",
-                border: "1px solid rgba(148,163,184,0.4)",
+                  "linear-gradient(145deg, #ecfdf5, #f0fdf4)",
+                border: "1px solid rgba(134, 239, 172, 0.5)",
               }}
             >
               <div
@@ -275,8 +320,9 @@ export default function App() {
                   fontSize: "12px",
                   textTransform: "uppercase",
                   letterSpacing: "0.18em",
-                  color: "#9ca3af",
+                  color: "#166534",
                   marginBottom: "10px",
+                  fontWeight: 600,
                 }}
               >
                 Current Weight
@@ -293,7 +339,7 @@ export default function App() {
                     fontSize: "40px",
                     fontWeight: 700,
                     letterSpacing: "-0.06em",
-                    color: lastWeight != null ? "#e5e7eb" : "#4b5563",
+                    color: lastWeight != null ? "#15803d" : "#9ca3af",
                   }}
                 >
                   {lastWeight != null ? lastWeight.toFixed(3) : "--.--"}
@@ -303,8 +349,9 @@ export default function App() {
                     fontSize: "14px",
                     textTransform: "uppercase",
                     letterSpacing: "0.16em",
-                    color: "#9ca3af",
+                    color: "#166534",
                     marginBottom: "6px",
+                    fontWeight: 600,
                   }}
                 >
                   kg
@@ -314,7 +361,7 @@ export default function App() {
                 style={{
                   marginTop: "8px",
                   fontSize: "12px",
-                  color: "#9ca3af",
+                  color: "#6b7280",
                   display: "flex",
                   justifyContent: "space-between",
                   gap: "8px",
@@ -328,8 +375,11 @@ export default function App() {
                     : "-"}
                 </span>
                 <span style={{ color: "#6b7280" }}>
-                  Topic: <span style={{ color: "#9ca3af" }}>{SCALE_TOPIC}</span>
+                  Topic: <span style={{ color: "#15803d", fontWeight: "bold" }}>{topic}</span>
                 </span>
+              </div>
+              <div style={{ marginTop: "4px", fontSize: "12px", color: "#6b7280" }}>
+                 Serial Number: <span style={{ color: "#15803d", fontWeight: "bold" }}>{serialNumber || "N/A"}</span>
               </div>
             </div>
 
@@ -338,13 +388,38 @@ export default function App() {
               style={{
                 padding: "16px",
                 borderRadius: "18px",
-                background: "#020617",
-                border: "1px solid rgba(148,163,184,0.3)",
+                background: "#f9fafb",
+                border: "1px solid rgba(229, 231, 235, 1)",
                 display: "flex",
                 flexDirection: "column",
                 gap: "14px",
               }}
             >
+               {/* Topic Input Field */}
+               <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <label style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.16em", color: "#6b7280" }}>
+                    Target Topic
+                  </label>
+                  <input
+                    type="text"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    disabled={isConnected || isConnecting}
+                    placeholder="Enter scale topic (e.g. CKRG123)"
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #d1d5db",
+                      borderRadius: "8px",
+                      padding: "8px 12px",
+                      color: "#1f2937",
+                      fontSize: "14px",
+                      outline: "none",
+                      cursor: isConnected ? "not-allowed" : "text",
+                      opacity: isConnected ? 0.6 : 1
+                    }}
+                  />
+               </div>
+
               <div
                 style={{
                   display: "flex",
@@ -359,7 +434,7 @@ export default function App() {
                     fontSize: "12px",
                     textTransform: "uppercase",
                     letterSpacing: "0.16em",
-                    color: "#9ca3af",
+                    color: "#6b7280",
                   }}
                 >
                   Actions
@@ -376,12 +451,12 @@ export default function App() {
                         fontSize: "13px",
                         fontWeight: 600,
                         background:
-                          "linear-gradient(135deg, #22c55e, #16a34a, #22c55e)",
-                        color: "#020617",
+                          "linear-gradient(135deg, #16a34a, #15803d)",
+                        color: "#ffffff",
                         cursor: isConnecting ? "not-allowed" : "pointer",
                         opacity: isConnecting ? 0.7 : 1,
                         boxShadow:
-                          "0 10px 25px -8px rgba(34,197,94,0.8), 0 0 0 1px rgba(21,128,61,0.8)",
+                          "0 4px 6px -1px rgba(22, 163, 74, 0.4), 0 2px 4px -1px rgba(22, 163, 74, 0.2)",
                       }}
                     >
                       {isConnecting ? "Connecting..." : "Connect"}
@@ -392,11 +467,11 @@ export default function App() {
                       style={{
                         padding: "8px 14px",
                         borderRadius: "999px",
-                        border: "1px solid rgba(248,113,113,0.9)",
+                        border: "1px solid rgba(239, 68, 68, 0.5)",
                         fontSize: "13px",
                         fontWeight: 500,
-                        background: "rgba(30,64,175,0.1)",
-                        color: "#fecaca",
+                        background: "#fef2f2",
+                        color: "#ef4444",
                         cursor: "pointer",
                       }}
                     >
@@ -426,11 +501,10 @@ export default function App() {
                     fontSize: "14px",
                     fontWeight: 600,
                     background: isConnected
-                      ? "linear-gradient(135deg, #38bdf8, #0ea5e9)"
-                      : "linear-gradient(135deg, #1e293b, #0f172a)",
-                    color: "#0f172a",
+                      ? "linear-gradient(135deg, #16a34a, #15803d)"
+                      : "#e5e7eb",
+                    color: isConnected ? "white" : "#9ca3af",
                     cursor: isConnected ? "pointer" : "not-allowed",
-                    opacity: isConnected ? 1 : 0.5,
                   }}
                 >
                   Start Streaming
@@ -443,18 +517,37 @@ export default function App() {
                     minWidth: "120px",
                     padding: "10px 16px",
                     borderRadius: "12px",
-                    border: "1px solid rgba(248,250,252,0.1)",
+                    border: isConnected ? "1px solid #16a34a" : "1px solid #e5e7eb",
                     fontSize: "14px",
                     fontWeight: 600,
                     background: isConnected
-                      ? "linear-gradient(135deg, #f97316, #fb923c)"
-                      : "linear-gradient(135deg, #1e293b, #0f172a)",
-                    color: "#020617",
+                      ? "#f0fdf4"
+                      : "#f9fafb",
+                    color: isConnected ? "#166534" : "#9ca3af",
                     cursor: isConnected ? "pointer" : "not-allowed",
-                    opacity: isConnected ? 1 : 0.5,
                   }}
                 >
                   Zero (Tare)
+                </button>
+                <button
+                  onClick={handleGetSerial}
+                  disabled={!isConnected}
+                  style={{
+                    flex: 1,
+                    minWidth: "120px",
+                    padding: "10px 16px",
+                    borderRadius: "12px",
+                    border: isConnected ? "1px solid #3b82f6" : "1px solid #e5e7eb",
+                    fontSize: "14px",
+                    fontWeight: 600,
+                    background: isConnected
+                      ? "#eff6ff"
+                      : "#f9fafb",
+                    color: isConnected ? "#1e40af" : "#9ca3af",
+                    cursor: isConnected ? "pointer" : "not-allowed",
+                  }}
+                >
+                  Get Serial
                 </button>
               </div>
 
@@ -465,12 +558,11 @@ export default function App() {
                   marginTop: "4px",
                 }}
               >
-                - Press <span style={{ color: "#e5e7eb" }}>Connect</span> to
-                connect to MQTT. - Press{" "}
-                <span style={{ color: "#e5e7eb" }}>Start Streaming</span> to
-                send START command. - Press{" "}
-                <span style={{ color: "#e5e7eb" }}>Zero (Tare)</span> to send Z
-                command.
+                - Press <span style={{ color: "#166534", fontWeight: "bold" }}>Connect</span> to
+                connect. - Press{" "}
+                <span style={{ color: "#166534", fontWeight: "bold" }}>Start Streaming</span> to
+                send START. - Press{" "}
+                <span style={{ color: "#166534", fontWeight: "bold" }}>Zero (Tare)</span> to send Z.
               </div>
             </div>
           </div>
@@ -480,8 +572,8 @@ export default function App() {
             style={{
               padding: "16px",
               borderRadius: "18px",
-              background: "#020617",
-              border: "1px solid rgba(148,163,184,0.3)",
+              background: "#f9fafb",
+              border: "1px solid rgba(229, 231, 235, 1)",
               display: "flex",
               flexDirection: "column",
               minHeight: "220px",
@@ -493,7 +585,7 @@ export default function App() {
                 fontSize: "12px",
                 textTransform: "uppercase",
                 letterSpacing: "0.16em",
-                color: "#9ca3af",
+                color: "#6b7280",
                 marginBottom: "10px",
               }}
             >
@@ -504,15 +596,14 @@ export default function App() {
                 flex: 1,
                 overflowY: "auto",
                 borderRadius: "12px",
-                background:
-                  "radial-gradient(circle at top, rgba(15,23,42,0.8), #020617)",
-                border: "1px solid rgba(30,64,175,0.6)",
+                background: "#ffffff",
+                border: "1px solid #e5e7eb",
                 padding: "8px 10px",
                 fontSize: "12px",
               }}
             >
               {log.length === 0 ? (
-                <div style={{ color: "#6b7280" }}>
+                <div style={{ color: "#9ca3af" }}>
                   No events yet. Connect and start streaming to see messages
                   here.
                 </div>
@@ -526,10 +617,10 @@ export default function App() {
                       marginBottom: "4px",
                     }}
                   >
-                    <span style={{ color: "#64748b", minWidth: "64px" }}>
+                    <span style={{ color: "#9ca3af", minWidth: "64px" }}>
                       {entry.ts}
                     </span>
-                    <span style={{ color: "#e5e7eb" }}>{entry.msg}</span>
+                    <span style={{ color: "#374151" }}>{entry.msg}</span>
                   </div>
                 ))
               )}
@@ -540,3 +631,4 @@ export default function App() {
     </div>
   );
 }
+
