@@ -18,8 +18,11 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [lastWeight, setLastWeight] = useState(null);
   const [lastTimestamp, setLastTimestamp] = useState(null);
+  const [unit, setUnit] = useState("kg");
   const [serialNumber, setSerialNumber] = useState(null);
   const [log, setLog] = useState([]);
+  const [isStale, setIsStale] = useState(false);
+  const lastPacketTime = useRef(Date.now());
 
   /* eslint-disable react-hooks/exhaustive-deps */
   const [topic, setTopic] = useState("CKRG123");
@@ -44,6 +47,20 @@ export default function App() {
       }
     };
   }, []);
+
+  // Check for stale connection
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isConnected) {
+        const timeSinceLastPacket = Date.now() - lastPacketTime.current;
+        setIsStale(timeSinceLastPacket > 5000);
+      } else {
+        setIsStale(false);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isConnected]);
 
   const appendLog = (msg) => {
     setLog((prev) => [
@@ -101,6 +118,8 @@ export default function App() {
 
     client.on("message", (msgTopic, message) => {
       if (msgTopic === topicRef.current) {
+        lastPacketTime.current = Date.now();
+        setIsStale(false);
         const sizeBytes =
           message && typeof message.length === "number"
             ? message.length
@@ -110,11 +129,26 @@ export default function App() {
           const payload = JSON.parse(message.toString());
           // appendLog(`Received raw: ${message.toString()}`);
 
-          if (payload.rawData) {
+          // Newest format: { stable_weight, dynamic_weight, unit, ... }
+          if (typeof payload.dynamic_weight !== "undefined") {
+             const weight = payload.dynamic_weight; // or payload.stable_weight
+             setLastWeight(weight);
+             setLastTimestamp(payload.timestamp || new Date().toISOString());
+             if (payload.unit) setUnit(payload.unit);
+             
+             // Optional: handle tare_weight or other fields if needed 
+             appendLog(`Received: ${weight} ${payload.unit || ""} (${sizeBytes} bytes)`);
+
+          } else if (payload.rawData) {
+            // Intermediate format: { rawData: "B + 79.699 kg", ... }
             const val = parseWeight(payload.rawData);
             if (val !== null) {
               setLastWeight(val);
               setLastTimestamp(payload.timestamp || new Date().toISOString());
+              // Try to guess unit from raw string if possible, or default to kg
+              if (payload.rawData.toLowerCase().includes("lb")) setUnit("lb");
+              else setUnit("kg");
+
               if (payload.serialNumber) {
                 setSerialNumber(payload.serialNumber);
               }
@@ -126,6 +160,7 @@ export default function App() {
             // Fallback for old format
             setLastWeight(payload.weight);
             setLastTimestamp(payload.ts || new Date().toISOString());
+            setUnit("kg"); // Default
             appendLog(`Received weight: ${payload.weight}`);
           } else {
             appendLog(`Unknown payload structure: ${message.toString()}`);
@@ -144,6 +179,7 @@ export default function App() {
     client.on("close", () => {
       setIsConnected(false);
       setIsConnecting(false);
+      setIsStale(false);
       appendLog("Disconnected from MQTT broker.");
     });
 
@@ -156,6 +192,7 @@ export default function App() {
     clientRef.current = null;
     setIsConnected(false);
     setIsConnecting(false);
+    setIsStale(false);
     appendLog("Manual disconnect.");
   };
 
@@ -205,9 +242,11 @@ export default function App() {
       <MqttScale 
         isConnected={isConnected}
         isConnecting={isConnecting}
+        isStale={isStale}
         topic={topic}
         lastWeight={lastWeight}
         lastTimestamp={lastTimestamp}
+        unit={unit}
         serialNumber={serialNumber}
         log={log}
         mqttHost={MQTT_HOST}

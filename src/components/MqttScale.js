@@ -5,9 +5,11 @@
 export default function MqttScale({
   isConnected,
   isConnecting,
+  isStale,
   topic,
   lastWeight,
   lastTimestamp,
+  unit,
   serialNumber,
   log,
   mqttHost, // Display only
@@ -136,6 +138,26 @@ export default function MqttScale({
               border: "1px solid rgba(134, 239, 172, 0.5)",
             }}
           >
+            {isStale && (
+              <div
+                style={{
+                  marginBottom: "12px",
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  background: "#fefce8",
+                  border: "1px solid #fde047",
+                  color: "#854d0e",
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                <span>⚠️</span>
+                <span>No Data Stream</span>
+              </div>
+            )}
             <div
               style={{
                 fontSize: "12px",
@@ -175,7 +197,7 @@ export default function MqttScale({
                   fontWeight: 600,
                 }}
               >
-                kg
+                {unit || "kg"}
               </div>
             </div>
             <div
