@@ -17,6 +17,7 @@ export default function MqttScale({
   onDisconnect,
   onStart,
   onZero,
+  onTare,
   onGetSerial,
   onTopicChange,
 }) {
@@ -386,7 +387,27 @@ export default function MqttScale({
                   cursor: isConnected ? "pointer" : "not-allowed",
                 }}
               >
-                Zero (Tare)
+                Zero
+              </button>
+              <button
+                onClick={onTare}
+                disabled={!isConnected}
+                style={{
+                  flex: 1,
+                  minWidth: "120px",
+                  padding: "10px 16px",
+                  borderRadius: "12px",
+                  border: isConnected
+                    ? "1px solid #d97706"
+                    : "1px solid #e5e7eb",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  background: isConnected ? "#fffbeb" : "#f9fafb",
+                  color: isConnected ? "#b45309" : "#9ca3af",
+                  cursor: isConnected ? "pointer" : "not-allowed",
+                }}
+              >
+                Tare
               </button>
               <button
                 onClick={onGetSerial}
@@ -427,9 +448,13 @@ export default function MqttScale({
               </span>{" "}
               to send START. - Press{" "}
               <span style={{ color: "#166534", fontWeight: "bold" }}>
-                Zero (Tare)
+                Zero
               </span>{" "}
-              to send Z.
+              to send Z. - Press{" "}
+			  <span style={{ color: "#166534", fontWeight: "bold" }}>
+                Tare
+              </span>{" "}
+              to send T.
             </div>
           </div>
         </div>

@@ -7,12 +7,14 @@ import MqttScale from "../components/MqttScale";
 // ====== COMMAND MAPPING - EASILY CHANGE COMMAND SET HERE ======
 const SCALE_COMMANDS = {
   START: "S",   // Command to start streaming data
-  ZERO: "Z",    // Command to zero
-  TARE: "T",    // Tare command
-  GET_SERIAL: "I4", // Command to get serial number (Standard SICS)
+  ZERO: "Z\r\n",    // Command to zero
+  TARE: "T\r\n",    // Tare command
+  GET_SERIAL: "I4\r\n", // Command to get serial number (Standard SICS)
 };
 
 export default function App() {
+
+  
   const clientRef = useRef(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -201,7 +203,7 @@ export default function App() {
       appendLog("Cannot send command: not connected.");
       return;
     }
-    const cmdTopic = `${topic}/commands`;
+    const cmdTopic = `${topic}/command`;
     // Calculate size
     const cmdSize = new TextEncoder().encode(command).length;
     
@@ -220,6 +222,10 @@ export default function App() {
 
   const handleZero = () => {
     publishCommand(SCALE_COMMANDS.ZERO);
+  };
+
+  const handleTare = () => {
+    publishCommand(SCALE_COMMANDS.TARE);
   };
 
   const handleGetSerial = () => {
@@ -254,6 +260,7 @@ export default function App() {
         onDisconnect={handleDisconnect}
         onStart={handleStart}
         onZero={handleZero}
+        onTare={handleTare}
         onGetSerial={handleGetSerial}
         onTopicChange={setTopic}
       />
