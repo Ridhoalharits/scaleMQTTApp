@@ -5,6 +5,8 @@
 export default function MqttScale({
   isConnected,
   isConnecting,
+  isValidating,
+  isValidated,
   isStale,
   topic,
   lastWeight,
@@ -84,9 +86,16 @@ export default function MqttScale({
               gap: "8px",
               padding: "6px 10px",
               borderRadius: "999px",
-              backgroundColor: isConnected
-                ? "rgba(22, 163, 74, 0.1)"
-                : "rgba(243, 244, 246, 1)",
+              backgroundColor:
+                isValidated
+                  ? "rgba(22, 163, 74, 0.1)"
+                  : isValidating
+                  ? "rgba(59, 130, 246, 0.1)"
+                  : isConnected
+                  ? "rgba(234, 179, 8, 0.1)"
+                  : isConnecting
+                  ? "rgba(249, 115, 22, 0.1)"
+                  : "rgba(243, 244, 246, 1)",
               border: "1px solid rgba(229, 231, 235, 1)",
               fontSize: "13px",
             }}
@@ -96,19 +105,28 @@ export default function MqttScale({
                 width: "8px",
                 height: "8px",
                 borderRadius: "999px",
-                backgroundColor: isConnected
-                  ? "#16a34a"
-                  : isConnecting
-                  ? "#f97316"
-                  : "#ef4444",
-                boxShadow: isConnected
+                backgroundColor:
+                  isValidated
+                    ? "#16a34a"
+                    : isValidating
+                    ? "#3b82f6"
+                    : isConnected
+                    ? "#eab308"
+                    : isConnecting
+                    ? "#f97316"
+                    : "#ef4444",
+                boxShadow: isValidated
                   ? "0 0 12px rgba(22, 163, 74, 0.6)"
                   : "none",
               }}
             />
             <span style={{ color: "#374151", fontWeight: 500 }}>
-              {isConnected
-                ? "Connected"
+              {isValidated
+                ? "Ready"
+                : isValidating
+                ? "Validating..."
+                : isConnected
+                ? "Broker Connected"
                 : isConnecting
                 ? "Connecting..."
                 : "Disconnected"}
@@ -265,7 +283,7 @@ export default function MqttScale({
                 type="text"
                 value={topic}
                 onChange={(e) => onTopicChange(e.target.value)}
-                disabled={isConnected || isConnecting}
+                disabled={isConnected || isConnecting || isValidating}
                 placeholder="Enter scale topic (e.g. CKRG123)"
                 style={{
                   background: "#ffffff",
@@ -351,7 +369,7 @@ export default function MqttScale({
             >
               <button
                 onClick={onStart}
-                disabled={!isConnected}
+                disabled={!isValidated}
                 style={{
                   flex: 1,
                   minWidth: "120px",
@@ -360,71 +378,71 @@ export default function MqttScale({
                   border: "none",
                   fontSize: "14px",
                   fontWeight: 600,
-                  background: isConnected
+                  background: isValidated
                     ? "linear-gradient(135deg, #16a34a, #15803d)"
                     : "#e5e7eb",
-                  color: isConnected ? "white" : "#9ca3af",
-                  cursor: isConnected ? "pointer" : "not-allowed",
+                  color: isValidated ? "white" : "#9ca3af",
+                  cursor: isValidated ? "pointer" : "not-allowed",
                 }}
               >
                 Start Streaming
               </button>
               <button
                 onClick={onZero}
-                disabled={!isConnected}
+                disabled={!isValidated}
                 style={{
                   flex: 1,
                   minWidth: "120px",
                   padding: "10px 16px",
                   borderRadius: "12px",
-                  border: isConnected
+                  border: isValidated
                     ? "1px solid #16a34a"
                     : "1px solid #e5e7eb",
                   fontSize: "14px",
                   fontWeight: 600,
-                  background: isConnected ? "#f0fdf4" : "#f9fafb",
-                  color: isConnected ? "#166534" : "#9ca3af",
-                  cursor: isConnected ? "pointer" : "not-allowed",
+                  background: isValidated ? "#f0fdf4" : "#f9fafb",
+                  color: isValidated ? "#166534" : "#9ca3af",
+                  cursor: isValidated ? "pointer" : "not-allowed",
                 }}
               >
                 Zero
               </button>
               <button
                 onClick={onTare}
-                disabled={!isConnected}
+                disabled={!isValidated}
                 style={{
                   flex: 1,
                   minWidth: "120px",
                   padding: "10px 16px",
                   borderRadius: "12px",
-                  border: isConnected
+                  border: isValidated
                     ? "1px solid #d97706"
                     : "1px solid #e5e7eb",
                   fontSize: "14px",
                   fontWeight: 600,
-                  background: isConnected ? "#fffbeb" : "#f9fafb",
-                  color: isConnected ? "#b45309" : "#9ca3af",
-                  cursor: isConnected ? "pointer" : "not-allowed",
+                  background: isValidated ? "#fffbeb" : "#f9fafb",
+                  color: isValidated ? "#b45309" : "#9ca3af",
+                  cursor: isValidated ? "pointer" : "not-allowed",
                 }}
               >
                 Tare
               </button>
               <button
                 onClick={onGetSerial}
-                disabled={!isConnected}
+                disabled={!isValidated}
                 style={{
                   flex: 1,
                   minWidth: "120px",
                   padding: "10px 16px",
                   borderRadius: "12px",
-                  border: isConnected
+                  border: isValidated
                     ? "1px solid #3b82f6"
                     : "1px solid #e5e7eb",
                   fontSize: "14px",
                   fontWeight: 600,
-                  background: isConnected ? "#eff6ff" : "#f9fafb",
-                  color: isConnected ? "#1e40af" : "#9ca3af",
-                  cursor: isConnected ? "pointer" : "not-allowed",
+                  background: isValidated ? "#eff6ff" : "#f9fafb",
+                  color: isValidated ? "#1e40af" : "#9ca3af",
+                  cursor: isValidated ? "pointer" : "not-allowed",
                 }}
               >
                 Get Serial

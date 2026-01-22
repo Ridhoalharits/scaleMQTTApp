@@ -6,14 +6,13 @@ import MqttScale from "../components/MqttScale";
 
 // ====== COMMAND MAPPING - EASILY CHANGE COMMAND SET HERE ======
 const SCALE_COMMANDS = {
-  START: "S",   // Command to start streaming data
-  ZERO: "Z\r\n",    // Command to zero
-  TARE: "T\r\n",    // Tare command
-  GET_SERIAL: "I4\r\n", // Command to get serial number (Standard SICS)
+  START: "SI",   // Command to start streaming data
+  ZERO: "Z",    // Command to zero
+  TARE: "T",    // Tare command
+  GET_SERIAL: "I4", // Command to get serial number (Standard SICS)
 };
 
 export default function App() {
-
   
   const clientRef = useRef(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -24,7 +23,10 @@ export default function App() {
   const [serialNumber, setSerialNumber] = useState(null);
   const [log, setLog] = useState([]);
   const [isStale, setIsStale] = useState(false);
+  const [isValidated, setIsValidated] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
   const lastPacketTime = useRef(Date.now());
+  const validateTimeoutRef = useRef(null);
 
   /* eslint-disable react-hooks/exhaustive-deps */
   const [topic, setTopic] = useState("CKRG123");
@@ -46,6 +48,9 @@ export default function App() {
     return () => {
       if (clientRef.current) {
         clientRef.current.end(true);
+      }
+      if (validateTimeoutRef.current) {
+        clearTimeout(validateTimeoutRef.current);
       }
     };
   }, []);
@@ -89,6 +94,8 @@ export default function App() {
     }
 
     setIsConnecting(true);
+    setIsValidating(false);
+    setIsValidated(false);
     appendLog(`Connecting to MQTT broker on topic: ${topic}...`);
 
     const options = {
@@ -114,12 +121,33 @@ export default function App() {
           appendLog(`Subscribe error: ${err.message}`);
         } else {
           appendLog(`Subscribed to topic: ${topic}`);
+          // Start Validation Handshake
+          setIsValidating(true);
+          appendLog("Validating scale connection (getting serial)...");
+          
+          client.publish(`${topic}/commands`, SCALE_COMMANDS.GET_SERIAL, { qos: 0 });
+
+          if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
+          validateTimeoutRef.current = setTimeout(() => {
+            setIsValidating(false);
+            if (!isValidated) { // Note: accessing state in timeout might be stale if not careful, but visual feedback is key
+               appendLog("Validation timeout: Scale did not respond.");
+            }
+          }, 5000);
         }
       });
     });
 
     client.on("message", (msgTopic, message) => {
       if (msgTopic === topicRef.current) {
+        // Any message from the topic validates the connection
+        if (!isValidated) {
+           setIsValidated(true);
+           setIsValidating(false);
+           if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
+           appendLog("Scale connection validated!");
+        }
+
         lastPacketTime.current = Date.now();
         setIsStale(false);
         const sizeBytes =
@@ -141,22 +169,44 @@ export default function App() {
              // Optional: handle tare_weight or other fields if needed 
              appendLog(`Received: ${weight} ${payload.unit || ""} (${sizeBytes} bytes)`);
 
-          } else if (payload.rawData) {
-            // Intermediate format: { rawData: "B + 79.699 kg", ... }
-            const val = parseWeight(payload.rawData);
-            if (val !== null) {
-              setLastWeight(val);
-              setLastTimestamp(payload.timestamp || new Date().toISOString());
-              // Try to guess unit from raw string if possible, or default to kg
-              if (payload.rawData.toLowerCase().includes("lb")) setUnit("lb");
-              else setUnit("kg");
+          } else if (payload.serialNumber) {
+            // Handle simplified serial number payload: { "serialNumber": "..." }
+            setSerialNumber(payload.serialNumber);
+            appendLog(`Received Serial: ${payload.serialNumber} (${sizeBytes} bytes)`);
+            // Do NOT parse weight from this
 
-              if (payload.serialNumber) {
-                setSerialNumber(payload.serialNumber);
-              }
-              appendLog(`Received: ${payload.rawData} (${sizeBytes} bytes)`);
-            } else {
-              appendLog(`Could not parse weight from: ${payload.rawData}`);
+          } else if (payload.rawData) {
+            // Check if rawData is an object with serialNumber (Newest simulation format)
+            if (typeof payload.rawData === 'object' && payload.rawData.serialNumber) {
+               setSerialNumber(payload.rawData.serialNumber);
+               appendLog(`Received Serial: ${payload.rawData.serialNumber} (${sizeBytes} bytes)`);
+               // Do NOT parse weight from this
+            } 
+            // Check if rawData is a string (Intermediate format)
+            else if (typeof payload.rawData === 'string') {
+                // Ignore if rawData indicates a serial number response
+                const isSerialMsg = payload.rawData.toLowerCase().includes("serialnumber");
+                const val = !isSerialMsg ? parseWeight(payload.rawData) : null;
+                
+                if (val !== null) {
+                  setLastWeight(val);
+                  setLastTimestamp(payload.timestamp || new Date().toISOString());
+                  // Try to guess unit from raw string if possible, or default to kg
+                  if (payload.rawData.toLowerCase().includes("lb")) setUnit("lb");
+                  else setUnit("kg");
+
+                  if (payload.serialNumber) {
+                    setSerialNumber(payload.serialNumber);
+                  }
+                  appendLog(`Received: ${payload.rawData} (${sizeBytes} bytes)`);
+                } else {
+                  // It might be just a serial number message
+                  if (isSerialMsg) {
+                      appendLog(`Received Serial Raw: ${payload.rawData}`);
+                  } else {
+                      appendLog(`Could not parse weight from: ${payload.rawData}`);
+                  }
+                }
             }
           } else if (typeof payload.weight !== "undefined") {
             // Fallback for old format
@@ -181,7 +231,10 @@ export default function App() {
     client.on("close", () => {
       setIsConnected(false);
       setIsConnecting(false);
+      setIsValidating(false);
+      setIsValidated(false);
       setIsStale(false);
+      if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
       appendLog("Disconnected from MQTT broker.");
     });
 
@@ -194,7 +247,10 @@ export default function App() {
     clientRef.current = null;
     setIsConnected(false);
     setIsConnecting(false);
+    setIsValidating(false);
+    setIsValidated(false);
     setIsStale(false);
+    if (validateTimeoutRef.current) clearTimeout(validateTimeoutRef.current);
     appendLog("Manual disconnect.");
   };
 
@@ -203,7 +259,12 @@ export default function App() {
       appendLog("Cannot send command: not connected.");
       return;
     }
-    const cmdTopic = `${topic}/command`;
+    // Only allow commands if validated, OR if it's the handshake command itself
+    if (!isValidated && command !== SCALE_COMMANDS.GET_SERIAL) {
+        appendLog("Cannot send command: Scale not validated yet.");
+        return;
+    }
+    const cmdTopic = `${topic}/commands`;
     // Calculate size
     const cmdSize = new TextEncoder().encode(command).length;
     
@@ -248,6 +309,8 @@ export default function App() {
       <MqttScale 
         isConnected={isConnected}
         isConnecting={isConnecting}
+        isValidating={isValidating}
+        isValidated={isValidated}
         isStale={isStale}
         topic={topic}
         lastWeight={lastWeight}
