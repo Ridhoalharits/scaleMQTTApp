@@ -9,6 +9,8 @@ import { SCALE_MANUFACTURERS, COMMAND_SETS } from "../constants/scaleCommands";
 // Removed local SCALE_COMMANDS definition
 
 export default function App() {
+
+  
   const clientRef = useRef(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -338,6 +340,10 @@ export default function App() {
   const handleZero = () => {
     publishCommand(getCommands().ZERO);
   };
+  
+  const handleTare = () => {
+    publishCommand(SCALE_COMMANDS.TARE);
+  };
 
   const handleGetSerial = () => {
     publishCommand(getCommands().GET_SERIAL);
@@ -372,6 +378,7 @@ export default function App() {
         onStart={handleStart}
         onStop={handleStop}
         onZero={handleZero}
+        onTare={handleTare}
         onGetSerial={handleGetSerial}
         onTopicChange={setTopic}
         onPrint={handlePrint}
