@@ -4,13 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import mqtt from "mqtt";
 import MqttScale from "../components/MqttScale";
 
-// ====== COMMAND MAPPING - EASILY CHANGE COMMAND SET HERE ======
-const SCALE_COMMANDS = {
-  START: "S",   // Command to start streaming data
-  ZERO: "Z",    // Command to zero
-  TARE: "T",    // Tare command
-  GET_SERIAL: "I4", // Command to get serial number (Standard SICS)
-};
+import { SCALE_MANUFACTURERS, COMMAND_SETS } from "../constants/scaleCommands";
+
+// Removed local SCALE_COMMANDS definition
 
 export default function App() {
   const clientRef = useRef(null);
@@ -23,10 +19,17 @@ export default function App() {
   const [log, setLog] = useState([]);
   const [isStale, setIsStale] = useState(false);
   const lastPacketTime = useRef(Date.now());
+  const pollingInterval = useRef(null);
 
   /* eslint-disable react-hooks/exhaustive-deps */
-  const [topic, setTopic] = useState("CKRG123");
+  const [topic, setTopic] = useState("scale/S413NS0RA05854");
+  const [scaleType, setScaleType] = useState("typeA"); // "typeA" | "typeB"
+  const [manufacturer, setManufacturer] = useState(SCALE_MANUFACTURERS.METTLER);
+
   const topicRef = useRef(topic); // Keep a ref for the message callback
+
+  // Helper to get current commands based on manufacturer
+  const getCommands = () => COMMAND_SETS[manufacturer]?.commands || {};
 
   // Environment variables
   const MQTT_HOST = process.env.NEXT_PUBLIC_MQTT_HOST;
@@ -44,6 +47,10 @@ export default function App() {
     return () => {
       if (clientRef.current) {
         clientRef.current.end(true);
+      }
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
       }
     };
   }, []);
@@ -69,13 +76,32 @@ export default function App() {
     ]);
   };
 
+
+
   const parseWeight = (str) => {
-    // Expected format: "B + 79.699 kg" or similar
-    // Match optional sign, optional space, then number
-    const match = str.match(/([+-]?\s*\d*\.?\d+)/);
-    if (!match) return null;
-    // Remove any spaces (like "+ 79") before parsing
-    return parseFloat(match[0].replace(/\s/g, ""));
+    // Legacy / Type A: "B + 79.699 kg"
+    if (scaleType === "typeA") {
+      const match = str.match(/([+-]?\s*\d*\.?\d+)/);
+      if (!match) return null;
+      return parseFloat(match[0].replace(/\s/g, ""));
+    }
+    
+    // Avery Type
+    if (scaleType === "avery") {
+      // Remove control chars (STX/ETX and others)
+      // eslint-disable-next-line no-control-regex
+      const clean = str.replace(/[\x00-\x1F\x7F-\x9F]/g, " ").trim();
+      // Look for the float. The format seems to be: STATUS_CODE  WEIGHT  UNIT
+      // e.g. "99   1.427 kg"
+      // We'll extract the last number before "kg" or just the safest float.
+      const match = clean.match(/(\d+\.\d+)/);
+      if (match) {
+        return parseFloat(match[1]);
+      }
+      return null;
+    }
+
+    return null;
   };
 
   const handleConnect = () => {
@@ -129,14 +155,20 @@ export default function App() {
           const payload = JSON.parse(message.toString());
           // appendLog(`Received raw: ${message.toString()}`);
 
-          // Newest format: { stable_weight, dynamic_weight, unit, ... }
-          if (typeof payload.dynamic_weight !== "undefined") {
-             const weight = payload.dynamic_weight; // or payload.stable_weight
+          // Newest format: { serialNumber, timestamp, stable, weight, unit, meta: { is_tared } }
+          if (typeof payload.weight !== "undefined" && typeof payload.stable !== "undefined") {
+             const weight = payload.weight;
              setLastWeight(weight);
-             setLastTimestamp(payload.timestamp || new Date().toISOString());
-             if (payload.unit) setUnit(payload.unit);
+             // handle timestamp (check if seconds or ms)
+             let ts = payload.timestamp;
+             if (ts && typeof ts === 'number' && ts < 10000000000) {
+                 ts = ts * 1000; // Convert sec to ms if needed
+             }
+             setLastTimestamp(ts ? new Date(ts).toISOString() : new Date().toISOString());
              
-             // Optional: handle tare_weight or other fields if needed 
+             if (payload.unit) setUnit(payload.unit);
+             if (payload.serialNumber) setSerialNumber(payload.serialNumber);
+             
              appendLog(`Received: ${weight} ${payload.unit || ""} (${sizeBytes} bytes)`);
 
           } else if (payload.rawData) {
@@ -187,9 +219,44 @@ export default function App() {
   };
 
   const handleDisconnect = () => {
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+      pollingInterval.current = null;
+    }
+    
     if (!clientRef.current) return;
-    clientRef.current.end(true);
-    clientRef.current = null;
+
+    // Send STOP command if we are currently connected
+    if (isConnected) {
+        appendLog("Sending STOP command...");
+        // Use the raw publish here to ensure it's sent before we close
+        const cmdTopic = `${topic}/command`;
+        // commands might need to be resolved from state or ref if manufacturer changes dynamically while connected
+        // but for now, rely on render state capture
+        const cmds = COMMAND_SETS[manufacturer]?.commands;
+        if (cmds && cmds.STOP) {
+            clientRef.current.publish(cmdTopic, cmds.STOP, { qos: 0 }, (err) => {
+                if (!err) {
+                    appendLog("STOP command sent.");
+                }
+                finishDisconnect();
+            });
+            return;
+        }
+        finishDisconnect();
+    } else {
+        finishDisconnect();
+    }
+  };
+
+  const finishDisconnect = () => {
+    if (clientRef.current) {
+      // Pass false to wait for pending packets (like the STOP command)
+      clientRef.current.end(false, () => {
+        appendLog("Disconnected gracefully.");
+      });
+      clientRef.current = null;
+    }
     setIsConnected(false);
     setIsConnecting(false);
     setIsStale(false);
@@ -201,29 +268,79 @@ export default function App() {
       appendLog("Cannot send command: not connected.");
       return;
     }
-    const cmdTopic = `${topic}/commands`;
-    // Calculate size
-    const cmdSize = new TextEncoder().encode(command).length;
+    const cmdTopic = `${topic}/command`;
     
+    // Calculate size
+    let cmdSize = 0;
+    if (typeof command === "string") {
+      cmdSize = new TextEncoder().encode(command).length;
+    } else if (command instanceof Uint8Array || (typeof Buffer !== "undefined" && Buffer.isBuffer(command))) {
+      cmdSize = command.length;
+    }
+
+    // If it's a buffer/array, we might want to log it as hex string for clarity
+    const logMsg = typeof command === "string" ? `"${command}"` : `[Hex: ${Array.from(command).map(b => b.toString(16).padStart(2, '0')).join(' ')}]`;
+
     clientRef.current.publish(cmdTopic, command, { qos: 0 }, (err) => {
       if (err) {
-        appendLog(`Failed to publish command "${command}": ${err.message}`);
+        appendLog(`Failed to publish command ${logMsg}: ${err.message}`);
       } else {
-        appendLog(`Published command "${command}" (${cmdSize} bytes) to ${cmdTopic}`);
+        appendLog(`Published command ${logMsg} (${cmdSize} bytes) to ${cmdTopic}`);
       }
     });
   };
 
+  const handlePrint = () => {
+    // STX (0x02) + "PP" + ETX (0x03)
+    const buffer = new Uint8Array([0x02, 0x50, 0x50, 0x03]);
+    publishCommand(buffer);
+  };
+
   const handleStart = () => {
-    publishCommand(SCALE_COMMANDS.START);
+    // Clear any existing interval just in case
+    if (pollingInterval.current) {
+      clearInterval(pollingInterval.current);
+      pollingInterval.current = null;
+    }
+
+    if (scaleType === "avery") {
+      appendLog("Starting Avery polling (sending PP every 300ms)...");
+      // Send once immediately
+      handlePrint();
+      // Then repeat
+      pollingInterval.current = setInterval(() => {
+        if (!isConnected) {
+            if (pollingInterval.current) {
+                clearInterval(pollingInterval.current);
+                pollingInterval.current = null;
+            }
+            return;
+        }
+        handlePrint();
+      }, 100);
+    } else {
+        // Continuous mode or Type A: send once
+        appendLog(`Sending start command (${manufacturer})...`);
+        publishCommand(getCommands().START);
+    }
+  };
+
+  const handleStop = () => {
+    if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
+        appendLog("Stopped Avery polling.");
+    }
+    appendLog("Sending STOP command...");
+    publishCommand(getCommands().STOP);
   };
 
   const handleZero = () => {
-    publishCommand(SCALE_COMMANDS.ZERO);
+    publishCommand(getCommands().ZERO);
   };
 
   const handleGetSerial = () => {
-    publishCommand(SCALE_COMMANDS.GET_SERIAL);
+    publishCommand(getCommands().GET_SERIAL);
   };
 
   return (
@@ -253,9 +370,15 @@ export default function App() {
         onConnect={handleConnect}
         onDisconnect={handleDisconnect}
         onStart={handleStart}
+        onStop={handleStop}
         onZero={handleZero}
         onGetSerial={handleGetSerial}
         onTopicChange={setTopic}
+        onPrint={handlePrint}
+        scaleType={scaleType}
+        onScaleTypeChange={setScaleType}
+        manufacturer={manufacturer}
+        onManufacturerChange={setManufacturer}
       />
     </div>
   );

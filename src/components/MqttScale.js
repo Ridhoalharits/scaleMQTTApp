@@ -16,9 +16,15 @@ export default function MqttScale({
   onConnect,
   onDisconnect,
   onStart,
+  onStop,
   onZero,
   onGetSerial,
   onTopicChange,
+  onPrint,
+  manufacturer,
+  onManufacturerChange,
+  scaleType,
+  onScaleTypeChange,
 }) {
   return (
     <div
@@ -65,6 +71,54 @@ export default function MqttScale({
             minWidth: "180px",
           }}
         >
+           {/* Scale Type Selector */}
+           {/* Scale Configuration */}
+           <div style={{ display: "flex", gap: "12px", marginBottom: "16px", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label style={{ fontSize: "10px", textTransform: "uppercase", color: "#6b7280", fontWeight: 600, letterSpacing: "0.05em" }}>Manufacturer</label>
+              <select
+                value={manufacturer}
+                onChange={(e) => onManufacturerChange(e.target.value)}
+                style={{
+                  fontSize: "13px",
+                  padding: "6px 10px",
+                  borderRadius: "8px",
+                  border: "1px solid #d1d5db",
+                  backgroundColor: "#ffffff",
+                  color: "#374151",
+                  outline: "none",
+                  cursor: "pointer",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+                }}
+              >
+                <option value="mettler">Mettler Toledo</option>
+                <option value="sartorius">Sartorius</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <label style={{ fontSize: "10px", textTransform: "uppercase", color: "#6b7280", fontWeight: 600, letterSpacing: "0.05em" }}>Protocol</label>
+              <select
+                value={scaleType}
+                onChange={(e) => onScaleTypeChange(e.target.value)}
+                style={{
+                  fontSize: "13px",
+                  padding: "6px 10px",
+                  borderRadius: "8px",
+                  border: "1px solid #d1d5db",
+                  backgroundColor: "#ffffff",
+                  color: "#374151",
+                  outline: "none",
+                  cursor: "pointer",
+                  boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
+                }}
+              >
+                <option value="typeA">Type A (Universal)</option>
+                <option value="avery">Avery</option>
+              </select>
+            </div>
+          </div>
+
           <div
             style={{
               fontSize: "12px",
@@ -369,6 +423,26 @@ export default function MqttScale({
                 Start Streaming
               </button>
               <button
+                onClick={onStop}
+                disabled={!isConnected}
+                style={{
+                  flex: 1,
+                  minWidth: "120px",
+                  padding: "10px 16px",
+                  borderRadius: "12px",
+                  border: isConnected
+                    ? "1px solid #ef4444" // Red border
+                    : "1px solid #e5e7eb",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  background: isConnected ? "#fef2f2" : "#f9fafb", // Light red bg
+                  color: isConnected ? "#b91c1c" : "#9ca3af", // Dark red text
+                  cursor: isConnected ? "pointer" : "not-allowed",
+                }}
+              >
+                Stop Streaming
+              </button>
+              <button
                 onClick={onZero}
                 disabled={!isConnected}
                 style={{
@@ -407,6 +481,26 @@ export default function MqttScale({
                 }}
               >
                 Get Serial
+              </button>
+              <button
+                onClick={onPrint}
+                disabled={!isConnected}
+                style={{
+                  flex: 1,
+                  minWidth: "120px",
+                  padding: "10px 16px",
+                  borderRadius: "12px",
+                  border: isConnected
+                    ? "1px solid #8b5cf6" // Violet
+                    : "1px solid #e5e7eb",
+                  fontSize: "14px",
+                  fontWeight: 600,
+                  background: isConnected ? "#f5f3ff" : "#f9fafb",
+                  color: isConnected ? "#7c3aed" : "#9ca3af",
+                  cursor: isConnected ? "pointer" : "not-allowed",
+                }}
+              >
+                Get Weight Avery
               </button>
             </div>
 
