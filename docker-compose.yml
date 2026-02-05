@@ -1,0 +1,13 @@
+services:
+  mqtt-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mqtt-app
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Add other runtime env vars here if needed, 
+      # but note that NEXT_PUBLIC_ vars are baked in at build time.
